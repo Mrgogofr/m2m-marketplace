@@ -1,19 +1,31 @@
+# fly.toml - Configuration Fly.io complète
+
 app = "m2m-marketplace"
-primary_region = "iad"
+primary_region = "iad"  # Région: Amérique (rapide pour crypto)
+
+# Alternative regions (choisir selon votre localisation):
+# - iad: Virginia, USA (rapide worldwide)
+# - lhr: Londres, UK (rapide Europe)
+# - cdg: Paris, France (rapide Europe)
+# - ams: Amsterdam (rapide Europe)
+# - nrt: Tokyo, Japan (rapide Asie)
 
 [build]
-  image = "m2m-marketplace:latest"
+  # Utiliser votre Dockerfile existant
+  dockerfile = "./docker/Dockerfile"
 
+# Variables d'environnement
 [env]
-  DATABASE_URL = "postgresql://..."
   ENVIRONMENT = "production"
   LOG_LEVEL = "INFO"
+  WALLET_MODE = "receive_only"
+  RENDER_EXTERNAL_URL = ""  # Fly.io donne automatiquement
 
+# Services (applications qui tournent)
 [[services]]
   protocol = "tcp"
-  internal_port = 8000
-  processes = ["app"]
-
+  internal_port = 8000  # Port interne de votre app
+  
   [[services.ports]]
     port = 80
     handlers = ["http"]
@@ -22,27 +34,37 @@ primary_region = "iad"
     port = 443
     handlers = ["tls", "http"]
 
+# Second service pour workers
 [[services]]
   protocol = "tcp"
   internal_port = 8001
-  processes = ["worker"]
-  
-  [[services.ports]]
-    port = 8001
 
+# Health check (Fly.io pinge /health régulièrement)
 [checks]
   [checks.http]
-    grace_period = "10s"
-    interval = "30s"
+    grace_period = "10s"        # Attendre 10s avant premier check
+    interval = "30s"            # Check toutes les 30s
     method = "GET"
     path = "/health"
     protocol = "http"
     timeout = "5s"
 
-[[processes]]
-name = "app"
-cmd = "gunicorn -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 src.main:app"
+# Volumes persistants (données persistent même si redeploy)
+[[mounts]]
+  source = "m2m_data"
+  destination = "/app/data"
+  size_gb = 10
 
-[[processes]]
-name = "worker"
-cmd = "python -m src.connectors.arbitrage"
+# Processes (Ce qui tourne)
+[processes]
+  app = "gunicorn -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 src.main:app"
+  worker = "python -m src.connectors.arbitrage"
+
+# Run before deployment (migrations DB)
+[deploy]
+  release_command = "python -m alembic upgrade head"
+
+# Auto-deploy depuis GitHub
+[deploy.github]
+  enabled = true
+  branch = "main"
