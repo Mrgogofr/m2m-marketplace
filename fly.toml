@@ -1,0 +1,48 @@
+app = "m2m-marketplace"
+primary_region = "iad"
+
+[build]
+  image = "m2m-marketplace:latest"
+
+[env]
+  DATABASE_URL = "postgresql://..."
+  ENVIRONMENT = "production"
+  LOG_LEVEL = "INFO"
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 8000
+  processes = ["app"]
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+  
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 8001
+  processes = ["worker"]
+  
+  [[services.ports]]
+    port = 8001
+
+[checks]
+  [checks.http]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    protocol = "http"
+    timeout = "5s"
+
+[[processes]]
+name = "app"
+cmd = "gunicorn -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 src.main:app"
+
+[[processes]]
+name = "worker"
+cmd = "python -m src.connectors.arbitrage"
