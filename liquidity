@@ -1,0 +1,127 @@
+# src/connectors/liquidity.py
+import asyncio
+import json
+import logging
+from decimal import Decimal
+from typing import Dict, Optional
+import time
+
+from src.config import settings
+from src.utils.logger import setup_logger
+
+logger = setup_logger(__name__)
+
+class LiquidityConnector:
+    """
+    Connecteur 2️⃣: Optimise routage liquidité DEX
+    Les bots payent pour meilleur routing
+    """
+    
+    def __init__(self):
+        self.btc_treasury: Decimal = Decimal(0)
+        self.btc_address = settings.BTC_ADDRESS
+        self.commission_rate = Decimal(str(settings.LIQUIDITY_COMMISSION))
+        
+        self.active_requests: Dict[str, dict] = {}
+        self.total_requests = 0
+        self.start_time = time.time()
+    
+    async def listen_24_7(self):
+        """Run 24/7"""
+        logger.info("🚀 LiquidityConnector starting 24/7 listener...")
+        
+        while True:
+            try:
+                await asyncio.gather(
+                    self._monitor_dex_pools(),
+                    self._optimize_routes(),
+                    return_exceptions=True
+                )
+            except Exception as e:
+                logger.error(f"❌ Liquidity listener error: {e}")
+                await asyncio.sleep(5)
+    
+    async def _monitor_dex_pools(self):
+        """Monitor DEX liquidity pools"""
+        while True:
+            try:
+                # Scan Uniswap, Curve, Balancer pools
+                logger.debug("📊 Monitoring DEX pools...")
+                await asyncio.sleep(2)
+                
+            except Exception as e:
+                logger.error(f"Pool monitoring error: {e}")
+                await asyncio.sleep(5)
+    
+    async def _optimize_routes(self):
+        """Optimise routing for best execution"""
+        while True:
+            try:
+                # Process swap requests
+                await asyncio.sleep(1)
+                
+            except Exception as e:
+                logger.error(f"Route optimization error: {e}")
+                await asyncio.sleep(5)
+    
+    async def execute_liquidity_request(self, bot_request: dict) -> dict:
+        """
+        Bot demande: "Route-moi cette swap optimalement"
+        Marketplace répond: "Best route = 0.0001 BTC"
+        
+        bot_request = {
+            "bot_id": "bot_456",
+            "swap": {"from": "ETH", "to": "USDC", "amount": 100},
+            "willing_to_pay": 0.0002  # BTC
+        }
+        """
+        bot_id = bot_request.get('bot_id', 'unknown')
+        
+        try:
+            logger.info(f"📈 Processing liquidity request from {bot_id}")
+            
+            self.total_requests += 1
+            
+            # 1. Simulate route optimization across DEXs
+            result = {
+                "success": True,
+                "best_route": "Uniswap V4",
+                "expected_slippage": 0.01,  # 1%
+                "execution_price": 1.95,
+            }
+            
+            # 2. Charge commission
+            fee_btc = self.commission_rate
+            self.btc_treasury += fee_btc
+            
+            logger.info(
+                f"✅ Liquidity request processed",
+                extra={
+                    "bot_id": bot_id,
+                    "fee_btc": float(fee_btc),
+                    "treasury_btc": float(self.btc_treasury),
+                    "total_requests": self.total_requests
+                }
+            )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Liquidity execution error for {bot_id}: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def shutdown(self):
+        """Graceful shutdown"""
+        logger.info("🛑 LiquidityConnector shutting down...")
+        uptime = (time.time() - self.start_time) / 3600
+        logger.info(
+            f"📊 Final stats: {self.total_requests} requests, {float(self.btc_treasury)} BTC, uptime {uptime:.2f}h"
+        )
+
+_liquidity_connector: Optional[LiquidityConnector] = None
+
+def get_liquidity_connector() -> LiquidityConnector:
+    global _liquidity_connector
+    if _liquidity_connector is None:
+        _liquidity_connector = LiquidityConnector()
+    return _liquidity_connector
