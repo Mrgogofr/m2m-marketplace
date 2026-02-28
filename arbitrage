@@ -1,0 +1,258 @@
+# src/connectors/arbitrage.py
+import asyncio
+import websockets
+import json
+import logging
+from decimal import Decimal
+from typing import Dict, List, Optional
+import time
+
+from src.config import settings
+from src.blockchain.wallet import BTCWallet
+from src.utils.logger import setup_logger
+
+logger = setup_logger(__name__)
+
+class ArbitrageConnector:
+    """
+    Connecteur 1️⃣: Écoute demandes arbitrage 24/7
+    Exécute trades cross-exchange, facture en BTC
+    
+    Flow:
+    Bot demande → Arbitrage détecté → Trade exécuté → Commission chargée
+    """
+    
+    def __init__(self):
+        self.btc_treasury: Decimal = Decimal(0)
+        self.btc_address = settings.BTC_ADDRESS
+        self.private_key = settings.PRIVATE_KEY_WALLET
+        
+        # Wallet self-custody
+        try:
+            self.wallet = BTCWallet(self.private_key)
+            logger.info(f"✅ Wallet initialized: {self.btc_address}")
+        except Exception as e:
+            logger.error(f"❌ Wallet init failed: {e}")
+            self.wallet = None
+        
+        self.connected_bots: Dict[str, dict] = {}
+        self.commission_rate = Decimal(str(settings.ARBITRAGE_COMMISSION))
+        
+        # Price caches
+        self.binance_prices: Dict[str, Decimal] = {}
+        self.kraken_prices: Dict[str, Decimal] = {}
+        self.dex_prices: Dict[str, Decimal] = {}
+        
+        # Metrics
+        self.total_transactions = 0
+        self.start_time = time.time()
+    
+    async def listen_24_7(self):
+        """Run 24/7 sans interruption"""
+        logger.info("🚀 ArbitrageConnector starting 24/7 listener...")
+        
+        while True:
+            try:
+                await asyncio.gather(
+                    self._listen_binance(),
+                    self._listen_kraken(),
+                    self._listen_dex_prices(),
+                    self._monitor_spreads(),
+                    return_exceptions=True
+                )
+            except Exception as e:
+                logger.error(f"❌ Arbitrage listener error: {e}", exc_info=True)
+                await asyncio.sleep(5)
+    
+    async def _listen_binance(self):
+        """Écoute prix Binance en temps réel"""
+        uri = settings.BINANCE_WS_URL
+        
+        while True:
+            try:
+                async with websockets.connect(uri) as ws:
+                    logger.info("📡 Connected to Binance WebSocket")
+                    
+                    while True:
+                        msg = await ws.recv()
+                        data = json.loads(msg)
+                        
+                        if 'p' in data:  # Price field
+                            symbol = data.get('s', 'UNKNOWN')
+                            price = Decimal(data['p'])
+                            self.binance_prices[symbol] = price
+                            
+            except websockets.exceptions.ConnectionClosed:
+                logger.warning("🔄 Binance connection closed, reconnecting...")
+                await asyncio.sleep(5)
+            except Exception as e:
+                logger.error(f"Binance listener error: {e}")
+                await asyncio.sleep(5)
+    
+    async def _listen_kraken(self):
+        """Écoute prix Kraken"""
+        uri = settings.KRAKEN_WS_URL
+        
+        while True:
+            try:
+                async with websockets.connect(uri) as ws:
+                    logger.info("📡 Connected to Kraken WebSocket")
+                    
+                    # Subscribe to price updates
+                    await ws.send(json.dumps({
+                        "event": "subscribe",
+                        "pair": ["XBT/USD", "ETH/USD"],
+                        "subscription": {"name": "ticker"}
+                    }))
+                    
+                    while True:
+                        msg = await ws.recv()
+                        data = json.loads(msg)
+                        
+                        if isinstance(data, list) and len(data) > 1:
+                            tick = data[1]
+                            if isinstance(tick, dict) and 'c' in tick:
+                                price = Decimal(tick['c'][0])
+                                pair = data[2]
+                                self.kraken_prices[pair] = price
+                                
+            except websockets.exceptions.ConnectionClosed:
+                logger.warning("🔄 Kraken connection closed, reconnecting...")
+                await asyncio.sleep(5)
+            except Exception as e:
+                logger.error(f"Kraken listener error: {e}")
+                await asyncio.sleep(5)
+    
+    async def _listen_dex_prices(self):
+        """Écoute prix DEX (Uniswap, Curve)"""
+        while True:
+            try:
+                # Fetch DEX prices
+                from src.blockchain.dex import UniswapV4Router
+                router = UniswapV4Router(settings.UNISWAP_V4_RPC)
+                
+                prices = await router.get_all_pool_prices()
+                self.dex_prices.update(prices)
+                
+                await asyncio.sleep(1)
+                
+            except Exception as e:
+                logger.error(f"DEX price listener error: {e}")
+                await asyncio.sleep(5)
+    
+    async def _monitor_spreads(self):
+        """Détecte spreads arbitrage"""
+        while True:
+            try:
+                for symbol in list(self.binance_prices.keys()):
+                    if symbol not in self.kraken_prices:
+                        continue
+                    
+                    binance_price = self.binance_prices[symbol]
+                    kraken_price = self.kraken_prices[symbol]
+                    
+                    if binance_price == 0:
+                        continue
+                    
+                    spread = abs(binance_price - kraken_price) / binance_price
+                    
+                    # Log spreads > 0.5%
+                    if spread > 0.005:
+                        logger.info(
+                            f"📊 SPREAD DETECTED: {symbol}",
+                            extra={
+                                "binance": float(binance_price),
+                                "kraken": float(kraken_price),
+                                "spread_pct": float(spread * 100),
+                                "arbitrage_opportunity": True
+                            }
+                        )
+                
+                await asyncio.sleep(1)
+                
+            except Exception as e:
+                logger.error(f"Spread monitor error: {e}")
+    
+    async def execute_arbitrage(self, bot_request: dict) -> dict:
+        """
+        Exécute transaction arbitrage et charge commission
+        
+        bot_request = {
+            "bot_id": "bot_123",
+            "from_exchange": "binance",
+            "to_exchange": "kraken",
+            "symbol": "BTCUSD",
+            "amount": 1.5,
+            "expected_profit": 750
+        }
+        """
+        bot_id = bot_request.get('bot_id', 'unknown')
+        amount = Decimal(str(bot_request.get('amount', 0)))
+        
+        try:
+            logger.info(f"🔄 Processing arbitrage for {bot_id}: {amount} units")
+            
+            # 1. Simulate trade execution (in real: call exchange APIs)
+            result = {
+                "success": True,
+                "profit": float(amount) * 0.02,  # 2% simulated profit
+                "from_exchange": bot_request.get('from_exchange'),
+                "to_exchange": bot_request.get('to_exchange'),
+            }
+            
+            # 2. Calculate commission
+            fee_btc = self.commission_rate
+            
+            # 3. Log transaction
+            self.total_transactions += 1
+            self.btc_treasury += fee_btc
+            
+            logger.info(
+                f"✅ Arbitrage executed",
+                extra={
+                    "bot_id": bot_id,
+                    "amount": float(amount),
+                    "profit_usd": result["profit"],
+                    "fee_btc": float(fee_btc),
+                    "treasury_btc": float(self.btc_treasury),
+                    "total_transactions": self.total_transactions
+                }
+            )
+            
+            # 4. Try to transfer BTC (if wallet configured)
+            if self.wallet and self.private_key:
+                try:
+                    tx_hash = await self.wallet.send_to_address(
+                        to_address=self.btc_address,
+                        amount=fee_btc
+                    )
+                    result["tx_hash"] = tx_hash
+                except Exception as e:
+                    logger.warning(f"BTC transfer failed (testnet?): {e}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Arbitrage execution error for {bot_id}: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e),
+                "bot_id": bot_id
+            }
+    
+    async def shutdown(self):
+        """Graceful shutdown"""
+        logger.info("🛑 ArbitrageConnector shutting down...")
+        uptime = (time.time() - self.start_time) / 3600
+        logger.info(
+            f"📊 Final stats: {self.total_transactions} tx, {float(self.btc_treasury)} BTC, uptime {uptime:.2f}h"
+        )
+
+# Singleton instance
+_arbitrage_connector: Optional[ArbitrageConnector] = None
+
+def get_arbitrage_connector() -> ArbitrageConnector:
+    global _arbitrage_connector
+    if _arbitrage_connector is None:
+        _arbitrage_connector = ArbitrageConnector()
+    return _arbitrage_connector
