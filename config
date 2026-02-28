@@ -1,0 +1,77 @@
+# src/config.py
+import os
+from pydantic_settings import BaseSettings
+from typing import Optional
+
+class Settings(BaseSettings):
+    # ==========================================
+    # ENVIRONMENT
+    # ==========================================
+    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
+    DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+    
+    # ==========================================
+    # DATABASE
+    # ==========================================
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://localhost/m2m")
+    
+    # ==========================================
+    # BITCOIN WALLET (VOTRE ADRESSE PERSONNELLE!)
+    # ==========================================
+    PRIVATE_KEY_WALLET: str = os.getenv("PRIVATE_KEY_WALLET", "")
+    BTC_ADDRESS: str = os.getenv("BTC_ADDRESS", "")
+    BTC_NETWORK: str = os.getenv("BTC_NETWORK", "mainnet")
+    
+    # ==========================================
+    # API ENDPOINTS
+    # ==========================================
+    BINANCE_WS_URL: str = "wss://stream.binance.com:9443/ws"
+    BINANCE_REST_API: str = "https://api.binance.com/api"
+    
+    KRAKEN_WS_URL: str = "wss://ws.kraken.com"
+    KRAKEN_REST_API: str = "https://api.kraken.com/0"
+    
+    COINBASE_WS_URL: str = "wss://ws-feed.exchange.coinbase.com"
+    COINBASE_REST_API: str = "https://api.coinbase.com/v1"
+    
+    # ==========================================
+    # DEX APIs
+    # ==========================================
+    UNISWAP_V4_RPC: str = os.getenv("UNISWAP_V4_RPC", "https://eth-mainnet.infura.io/v3/YOUR_KEY")
+    CURVE_RPC: str = os.getenv("CURVE_RPC", "https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY")
+    BALANCER_RPC: str = os.getenv("BALANCER_RPC", "https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY")
+    
+    # ==========================================
+    # COMMISSION RATES
+    # ==========================================
+    ARBITRAGE_COMMISSION: float = float(os.getenv("ARBITRAGE_COMMISSION", "0.0005"))
+    LIQUIDITY_COMMISSION: float = float(os.getenv("LIQUIDITY_COMMISSION", "0.0001"))
+    ORACLE_COMMISSION: float = float(os.getenv("ORACLE_COMMISSION", "0.00001"))
+    
+    # ==========================================
+    # RENDER
+    # ==========================================
+    PORT: int = int(os.getenv("PORT", "8000"))
+    RENDER_EXTERNAL_URL: str = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8000")
+    RENDER_REGION: str = os.getenv("RENDER_REGION", "unknown")
+    
+    # ==========================================
+    # UPTIMEROBOT
+    # ==========================================
+    UPTIMEROBOT_MONITORING: bool = os.getenv("UPTIMEROBOT_MONITORING", "true").lower() == "true"
+    UPTIMEROBOT_CHECK_INTERVAL: int = int(os.getenv("UPTIMEROBOT_CHECK_INTERVAL", "300"))
+    
+    class Config:
+        env_file = ".env"
+        case_sensitive = True
+
+# Singleton instance
+settings = Settings()
+
+# Validate critical settings
+if settings.ENVIRONMENT == "production":
+    if not settings.PRIVATE_KEY_WALLET:
+        raise ValueError("❌ PRIVATE_KEY_WALLET must be set in production!")
+    if not settings.BTC_ADDRESS:
+        raise ValueError("❌ BTC_ADDRESS must be set in production!")
